@@ -19,9 +19,9 @@
 ## 1. Why This Project?
 
 Over the past few years, I’ve had millions of entity sentiment records sitting in a Google Cloud BigQuery dataset. Every record captures an entity mention with three key metrics:
-1. **Sentiment score**: Polarity ranging from $-1.0$ (strongly negative) to $+1.0$ (strongly positive).
-2. **Magnitude**: Emotional intensity or strength ($0.0$ upwards).
-3. **Salience**: How central or prominent the entity was in context ($0.0$ to $1.0$).
+1. **Sentiment score**: Polarity ranging from -1.0 (strongly negative) to +1.0 (strongly positive).
+2. **Magnitude**: Emotional intensity or strength (0.0 upwards).
+3. **Salience**: How central or prominent the entity was in context (0.0 to 1.0).
 
 Along with timestamps and taxonomy paths, this data offers a fascinating view into how people, organisations, places, and concepts trend over time.
 
@@ -51,44 +51,43 @@ That means:
 
 Instead of building a decoupled client-side SPA, we used **Streamlit**:
 
-```mermaid
-flowchart TD
-    subgraph Client["Browser"]
-        User["User Browser<br/>(Clean WebSocket Canvas)"]
-    end
-
-    subgraph SecurityGate["Security Gate"]
-        OAuth["Google OAuth 2.0<br/>(Allowed Users Whitelist)"]
-    end
-
-    subgraph StreamlitApp["Streamlit Server (Python on Cloud Run)"]
-        UI["5 Analytics Views & Plotly"]
-        Cache["@st.cache_data / @st.cache_resource"]
-        PyGRPC["Native Python gRPC Channel<br/>(grpcio over HTTP/2)"]
-        OIDC["GCP OIDC Token Fetcher"]
-    end
-
-    subgraph Backend["Backend Service (Java 21 on Cloud Run)"]
-        IAM["Cloud Run IAM Ingress Proxy"]
-        JavaService["murisa-grpc Service"]
-        Dagger["Dagger 2 DI + Caffeine Cache"]
-        BQGateway["BigQuery Query Gateway"]
-    end
-
-    subgraph Storage["Warehouse"]
-        BQ[("BigQuery Partitioned Tables")]
-    end
-
-    User <== "WebSockets / HTTPS" ==> OAuth
-    OAuth --> UI
-    UI --> Cache
-    Cache --> PyGRPC
-    PyGRPC --> OIDC
-    OIDC -- "Native HTTP/2 + Bearer ID Token" --> IAM
-    IAM --> JavaService
-    JavaService --> Dagger
-    Dagger --> BQGateway
-    BQGateway -- "Parameterised SQL" --> BQ
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    CLIENT BROWSER                            │
+│  User Browser (WebSockets / Interactive Reactive Canvas)     │
+└──────────────────────────────┬───────────────────────────────┘
+                               │ HTTPS / WebSockets
+                               ▼
+┌──────────────────────────────────────────────────────────────┐
+│                    SECURITY INGRESS                          │
+│  Google OAuth 2.0 (ALLOWED_USERS Whitelist Gate)             │
+└──────────────────────────────┬───────────────────────────────┘
+                               │ Authenticated Session
+                               ▼
+┌──────────────────────────────────────────────────────────────┐
+│            STREAMLIT ENGINE (Python on Cloud Run)            │
+│  • 5 Analytics Views (Plotly / Altair)                       │
+│  • Caching: @st.cache_data & @st.cache_resource              │
+│  • Native Python gRPC Channel (grpcio over HTTP/2)           │
+│  • GCP OIDC Identity Token Provider                          │
+└──────────────────────────────┬───────────────────────────────┘
+                               │ Native HTTP/2 gRPC
+                               │ + Authorization: Bearer <ID_TOKEN>
+                               ▼
+┌──────────────────────────────────────────────────────────────┐
+│             BACKEND SERVICE (Java 21 on Cloud Run)           │
+│  • Cloud Run IAM Ingress Proxy                               │
+│  • murisa-grpc Service Handler                               │
+│  • Dagger 2 Dependency Injection                             │
+│  • Caffeine In-Memory Cache                                  │
+│  • QueryGateway & RowMapper Abstractions                     │
+└──────────────────────────────┬───────────────────────────────┘
+                               │ Parameterised SQL
+                               ▼
+┌──────────────────────────────────────────────────────────────┐
+│                 DATA WAREHOUSE (BigQuery)                    │
+│  Partitioned Sentiment Tables (Pruned by Date Bounds)        │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 In Streamlit, Python runs entirely on the server. The user’s browser only renders the visual components and sends interaction events back over a WebSocket connection.
@@ -155,11 +154,13 @@ gRPC Service Handler  ──>  MurisaProcessor<Req, Res>  ──>  QueryGateway 
 
 ### 3.3 Outlier-Resistant Salience-Weighted Sentiment in SQL
 
-A common trap in sentiment analysis is taking an unweighted average of raw polarity scores. An entity mentioned once with an extreme score of $+1.0$ can artificially outrank an entity mentioned hundreds of times with consistent, high-confidence positive sentiment.
+A common trap in sentiment analysis is taking an unweighted average of raw polarity scores. An entity mentioned once with an extreme score of +1.0 can artificially outrank an entity mentioned hundreds of times with consistent, high-confidence positive sentiment.
 
 To solve this, our queries compute a **salience-weighted score**:
 
-$$\text{Salience-Weighted Score} = \frac{\sum (\text{Score} \times \text{Salience})}{\sum \text{Salience}}$$
+```
+Salience-Weighted Score = SUM(Score * Salience) / SUM(Salience)
+```
 
 Mentions where the entity is incidental (low salience) barely shift the needle, while mentions where the entity is the primary subject (high salience) carry substantial weight.
 
@@ -250,7 +251,9 @@ The dashboard is structured into five views designed for deep exploration:
 2. **Entity Ranking**: Leaderboards filtered by document threshold, minimum salience, and timeframe, sorting entities by their salience-weighted score.
 3. **Deep Dive**: Individual entity analysis rendering day-by-day sentiment score progression, daily volume, and cumulative sentiment curves.
 4. **Period Momentum**: Compares entity performance between a baseline window and a current window:
-   $$\Delta \text{Sentiment} = \text{Score}_{\text{current}} - \text{Score}_{\text{baseline}}$$
+   ```
+   Sentiment Delta = Current Period Score - Baseline Period Score
+   ```
    Classifies entities as **GAINING**, **LOSING**, or maintaining **STABLE** momentum.
 5. **Google Trends Context**: Cross-references internal entity sentiment against external public curiosity using Google Cloud's public `google_trends` BigQuery dataset, ranking top search terms and fastest rising queries.
 
